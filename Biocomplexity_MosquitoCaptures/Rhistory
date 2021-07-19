@@ -1,0 +1,512 @@
+#transforming original quantile data into tranformed data
+load(paste0(wd, "corrected/20190826_best_transformations.Rdata")) #all_best_transforms
+transformation_used=as.character(all_best_transforms[all_best_transforms$X_cols==numeric_col,"all_best_transforms"])
+#transform_expr=paste0(transformation_used, "(resp_curve_data_notTrans0[,'", numeric_col, "'])")
+transform_expr=paste0(transformation_used, "(resp_var_seq_notTrans)")
+library(bestNormalize)
+transform_object=eval(parse(text=transform_expr))
+transform=transform_object$x.t
+#match_df=data.frame(resp_var_seq_notTrans, transform)
+resp_curve_data[,numeric_col]=transform
+if (length(factor_cols)>0){
+for (factor_col in factor_cols){
+unique_factor_vals=unique(resp_curve_data0[,factor_col])
+for (unique_factor_val in unique_factor_vals){
+tmp_df=resp_curve_data
+tmp_df[,factor_col]=unique_factor_val
+if (factor_col==factor_cols[1]&unique_factor_val==unique_factor_vals[1]){
+mega_response_df=tmp_df
+}else{
+mega_response_df=rbind(mega_response_df, tmp_df)
+}
+}
+tmp_df[,factor_col]=as.factor(tmp_df[,factor_col])
+}
+resp_curve_data=mega_response_df
+}
+if (length(factor_cols)==1){
+resp_curve_data[,factor_cols]=as.factor(resp_curve_data[,factor_cols])
+}
+if (length(factor_cols)>1){
+resp_curve_data[,factor_cols]=lapply(resp_curve_data[,factor_cols],factor)
+}
+#resp_curve_data$dep_var=NA
+#now the df to use for prediction is ready
+if (is.null(ncomps)){
+resp_curve_vals=predict(plsFit, newdata = resp_curve_data)
+}else{
+resp_curve_vals=c(predict(plsFit, newdata = resp_curve_data, ncomps))
+# if (class(resp_curve_vals)=="array"){#to handle the weird pls 3d array results
+#   #resp_curve_vals=resp_curve_vals[c(1:dim(resp_curve_vals)[1], 1, dim(resp_curve_vals)[3])] #picking the full model with all components
+#   resp_curve_vals=resp_curve_vals[, , dim(resp_curve_vals)[3]] #picking the full model with all components
+#   #resp_curve_vals=apply(resp_curve_vals, c(1,2), mean)
+#   #resp_curve_vals=c(resp_curve_vals)
+# }
+}
+resp_curve_results=cbind(resp_curve_data, response=resp_curve_vals)
+resp_curve_results=resp_curve_results[,c(numeric_col, "response")]
+#must untransform again!!
+resp_curve_results[,numeric_col]=predict(transform_object, newdata = resp_curve_results[,numeric_col], inverse = TRUE)
+resp_curve_results = aggregate(resp_curve_results,
+by = list(resp_curve_results[, numeric_col]),
+FUN = mean)
+resp_curve_results=resp_curve_results[, c(numeric_col, "response")]
+#now summary by resp col
+response_var_Q05_loc=max(which(abs(resp_curve_results[,1]-response_var_Q05_notTrans)==min(abs(resp_curve_results[,1]-response_var_Q05_notTrans))[1]))
+response_var_Q95_loc=min(which(abs(resp_curve_results[,1]-response_var_Q95_notTrans)==min(abs(resp_curve_results[,1]-response_var_Q95_notTrans))[1]))
+#calc var imp
+tmp_var_imp=resp_curve_results[response_var_Q95_loc,2]-resp_curve_results[response_var_Q05_loc,2]
+var_imp_df_row=which(IndVarImp$variable==numeric_col)
+IndVarImp[var_imp_df_row,"Q05"]=response_var_Q05_notTrans
+IndVarImp[var_imp_df_row,"Q95"]=response_var_Q95_notTrans
+IndVarImp[var_imp_df_row,"delta"]=tmp_var_imp
+IndVarImp[var_imp_df_row,"varImp"]=abs(tmp_var_imp)
+tiff_name=paste0(regressions_output_dir, proj_str , "_response_curves_", numeric_col, ".tiff")
+line_number=get_last_line(script.dir.info, script.name.info) #have this righ after a line next to the output that is unique in the script (including comments)
+tiff(tiff_name,
+width = 8, height = 8, units = "in",
+pointsize = 12, compress="lzw", bg = "white", res = 300)
+plot(resp_curve_results[, numeric_col], resp_curve_results[, "response"], xlab=numeric_col, ylab="Kfs log", type="l", col="darkblue", lwd=3)
+dev.off()
+if (save_as_jpg){
+jpeg_name=paste0(regressions_output_dir, proj_str , "_response_curves_", numeric_col, ".jpg")
+line_number=get_last_line(script.dir.info, script.name.info) #have this righ after a line next to the output that is unique in the script (including comments)
+jpeg(jpeg_name,
+width = 8, height = 8, units = "in",
+pointsize = 12, bg = "white", res = 300)
+plot(resp_curve_results[, numeric_col], resp_curve_results[, "response"], xlab=numeric_col, ylab="Log of Kfs (mm/hr)", type="l", col="darkblue", lwd=3)
+dev.off()
+}
+}
+}
+csv_name=paste0(regressions_output_dir, proj_str, "_varImp.csv")
+line_number=get_last_line(script.dir.info, script.name.info) #have this righ after a line next to the output that is unique in the script (including comments)
+IndVarImp=IndVarImp[order(IndVarImp$varImp, decreasing = T),]
+write.csv(IndVarImp, file=csv_name, row.names = F)
+##########################
+#try to make 2d response plots
+if (plot_2d){
+resp_curve_data=regression_mat
+resp_curve_data0=resp_curve_data[,!(names(resp_curve_data) %in% "class")]
+df_classes=sapply(resp_curve_data0, class)
+numeric_cols=names(resp_curve_data0)[df_classes %in% c("numeric", "integer")]
+if (length(numeric_cols)>n_factors_in2D_plots){
+numeric_varImpOrderHiToLow=varImpOrderHiToLow[varImpOrderHiToLow %in% numeric_cols]
+numeric_cols=numeric_varImpOrderHiToLow[c(1:n_factors_in2D_plots)] #IndVarImp
+}
+numeric_cols=as.character(numeric_cols)
+factor_cols=names(resp_curve_data0)[df_classes %in% c("factor")]
+numeric_col_pairs=combn(numeric_cols, 2)
+numeric_col=numeric_cols[4]
+factor_col=factor_cols[1]
+unique_factor_val=1
+i=1
+for (i in c(1:dim(numeric_col_pairs)[2])){
+resp_curve_data=resp_curve_data0
+numeric_col1=as.character(numeric_col_pairs[1,i])
+numeric_col2=as.character(numeric_col_pairs[2,i])
+numeric_col_pair_v1=paste0(numeric_col_pairs[1,i], "__", numeric_col_pairs[2,i])
+numeric_col_pair_v2=paste0(numeric_col_pairs[2,i], "__", numeric_col_pairs[1,i])
+cat(paste0("doing 3d graph for ", numeric_col_pair_v1, "\n"))
+nbins=10
+library(bestNormalize)
+##      #now add the sequence of values from the target response variable
+#use the untransformed sequence!
+resp_curve_data_notTrans=resp_curve_data_notTrans0
+response_var_Q95_notTrans=quantile(resp_curve_data_notTrans[,numeric_col1], 0.95)
+response_var_Q05_notTrans=quantile(resp_curve_data_notTrans[,numeric_col1], 0.05)
+#resp_var_seq_notTrans=seq(from=response_var_Q05_notTrans, to=response_var_Q95_notTrans, length.out=100)
+resp_var_seq_notTrans1=seq(from=min(resp_curve_data_notTrans[,numeric_col1],na.rm=T), to=max(resp_curve_data_notTrans[,numeric_col1],na.rm=T), length.out=nbins)
+#transforming original quantile data into tranformed data
+load(paste0(wd, "corrected/20190826_best_transformations.Rdata")) #all_best_transforms
+transformation_used=as.character(all_best_transforms[all_best_transforms$X_cols==numeric_col1,"all_best_transforms"])
+#transform_expr=paste0(transformation_used, "(resp_curve_data_notTrans0[,'", numeric_col, "'])")
+transform_expr=paste0(transformation_used, "(resp_var_seq_notTrans1)")
+transform_object1=eval(parse(text=transform_expr))
+transform1=transform_object1$x.t
+#match_df=data.frame(resp_var_seq_notTrans, transform)
+resp_var_seq1=transform1
+##      #now add the sequence of values from the target response variable
+#use the untransformed sequence!
+resp_curve_data_notTrans=resp_curve_data_notTrans0
+response_var_Q95_notTrans=quantile(resp_curve_data_notTrans[,numeric_col2], 0.95)
+response_var_Q05_notTrans=quantile(resp_curve_data_notTrans[,numeric_col2], 0.05)
+#resp_var_seq_notTrans=seq(from=response_var_Q05_notTrans, to=response_var_Q95_notTrans, length.out=100)
+resp_var_seq_notTrans2=seq(from=min(resp_curve_data_notTrans[,numeric_col2],na.rm=T), to=max(resp_curve_data_notTrans[,numeric_col2],na.rm=T), length.out=nbins)
+#transforming original quantile data into tranformed data
+load(paste0(wd, "corrected/20190826_best_transformations.Rdata")) #all_best_transforms
+transformation_used=as.character(all_best_transforms[all_best_transforms$X_cols==numeric_col2,"all_best_transforms"])
+#transform_expr=paste0(transformation_used, "(resp_curve_data_notTrans0[,'", numeric_col, "'])")
+transform_expr=paste0(transformation_used, "(resp_var_seq_notTrans2)")
+transform_object2=eval(parse(text=transform_expr))
+transform2=transform_object2$x.t
+#match_df=data.frame(resp_var_seq_notTrans, transform)
+resp_var_seq2=transform2
+#resp_var_seq1=seq(from=min(resp_curve_data[,numeric_col1],na.rm=T), to=max(resp_curve_data[,numeric_col1],na.rm=T), length.out=nbins)
+#resp_var_seq2=seq(from=min(resp_curve_data[,numeric_col2],na.rm=T), to=max(resp_curve_data[,numeric_col2],na.rm=T), length.out=nbins)
+jnk=as.data.frame(t(as.matrix(apply(resp_curve_data[,c(numeric_cols)], 2, FUN = median))))
+resp_curve_data_frst_row=resp_curve_data[1,]
+col_match=match(names(jnk), names(resp_curve_data_frst_row))
+resp_curve_data_frst_row[,col_match]=jnk
+resp_curve_data=resp_curve_data_frst_row[rep(1, times=nbins*nbins),]
+resp_curve_data[,numeric_col1]=as.numeric(resp_curve_data[,numeric_col1])
+resp_curve_data[,numeric_col1]<-c(rep(resp_var_seq1,times=nbins))
+resp_curve_data[,numeric_col2]=rep(resp_var_seq2,each=nbins)
+if (length(factor_cols)>0){
+for (factor_col in factor_cols){
+unique_factor_vals=unique(resp_curve_data0[,factor_col])
+for (unique_factor_val in unique_factor_vals){
+tmp_df=resp_curve_data
+tmp_df[,factor_col]=unique_factor_val
+if (factor_col==factor_cols[1]&unique_factor_val==unique_factor_vals[1]){
+mega_response_df=tmp_df
+}else{
+mega_response_df=rbind(mega_response_df, tmp_df)
+}
+}
+}
+resp_curve_data=mega_response_df
+}
+if (length(factor_cols)==1){
+resp_curve_data[,factor_cols]=as.factor(resp_curve_data[,factor_cols])
+}
+if (length(factor_cols)>1){
+resp_curve_data[,factor_cols]=lapply(resp_curve_data[,factor_cols],factor)
+}
+#now the df to use for prediction is ready
+if (is.null(ncomps)){
+resp_curve_vals=predict(plsFit, newdata = resp_curve_data)
+}else{
+resp_curve_vals=c(predict(plsFit, newdata = resp_curve_data, ncomps))
+}
+#resp_curve_vals=predict(plsFit, newdata = resp_curve_data)
+resp_curve_results=cbind(resp_curve_data, response=resp_curve_vals)
+resp_curve_results=resp_curve_results[,c(numeric_col1, numeric_col2, "response")]
+resp_curve_results[,numeric_col1]=predict(transform_object1, newdata = resp_curve_results[,numeric_col1], inverse = TRUE)
+resp_curve_results[,numeric_col2]=predict(transform_object2, newdata = resp_curve_results[,numeric_col2], inverse = TRUE)
+resp_curve_results = aggregate(resp_curve_results,
+by = list(resp_curve_results[, numeric_col1], resp_curve_results[, numeric_col2]),
+FUN = mean)
+resp_curve_results=resp_curve_results[, c(numeric_col1, numeric_col2, "response")]
+library(plot3D)
+tiff_name=paste0(regressions_output_dir, proj_str,  "_response_curves_2D_", numeric_col1,"_and_", numeric_col2, ".tiff")
+line_number=get_last_line(script.dir.info, script.name.info) #have this righ after a line next to the output that is unique in the script (including comments)
+#tiff_name=paste0("response_curves_2D_", numeric_col1,"_and_", numeric_col2, ".tif")
+tiff(tiff_name,
+width = 8, height = 8, units = "in",
+pointsize = 12, compress="lzw", bg = "white", res = 300)
+ribbon3D(x=resp_var_seq_notTrans1, y=resp_var_seq_notTrans2, z=matrix(resp_curve_results[,3], ncol=nbins), xlab=numeric_col1, ylab=numeric_col2, zlab="log(Kfs)", ticktype="detailed", clab="Log of Kfs (mm/hr)")
+dev.off()
+if (save_as_jpg){
+jpeg_name=paste0(regressions_output_dir, proj_str,  "_response_curves_2D_", numeric_col1,"_and_", numeric_col2, ".jpg")
+line_number=get_last_line(script.dir.info, script.name.info) #have this righ after a line next to the output that is unique in the script (including comments)
+#tiff_name=paste0("response_curves_2D_", numeric_col1,"_and_", numeric_col2, ".tif")
+jpeg(jpeg_name,
+width = 8, height = 8, units = "in",
+pointsize = 12, bg = "white", res = 300)
+ribbon3D(x=resp_var_seq_notTrans1, y=resp_var_seq_notTrans2, z=matrix(resp_curve_results[,3], ncol=nbins), xlab=numeric_col1, ylab=numeric_col2, zlab="log(Kfs)", ticktype="detailed", clab="Log of Kfs (mm/hr)")
+dev.off()
+}
+temp_output_dir=paste0(wd, "temp_folder/")
+dir.create(temp_output_dir, showWarnings = F)
+if (numeric_col_pair_v1 %in% animation_pairs | numeric_col_pair_v2 %in% animation_pairs){
+cat("doing animation for ", numeric_col_pair_v1, "\n")
+unlink(paste0(temp_output_dir,"img*.jpg")) #delete previous frames
+mov_name=paste0(regressions_output_dir, proj_str,  "_", numeric_col1,"_and_", numeric_col2, ".mp4")
+library(stringr)
+angle_range=15
+angles=c(seq(from=(-135+angle_range), to=(-135-angle_range), by=-0.5), seq(from=(-135-angle_range), to=(-135+angle_range), by=0.5))
+i=1
+for (i in c(1:length(angles))){
+i_str=str_pad(i, width = 4, pad = "0")
+jpeg_name=paste0("temp_folder/img", i_str, ".jpg")
+angle=angles[i]
+jpeg(jpeg_name,
+width = 8, height = 8, units = "in",
+pointsize = 12, quality=80, bg = "white", res = 300)
+ribbon3D(x=resp_var_seq_notTrans1, y=resp_var_seq_notTrans2, z=matrix(resp_curve_results[,3], ncol=nbins), xlab=numeric_col1, ylab=numeric_col2, zlab="log(Kfs)", ticktype="detailed", theta = angle, phi = 25, clab="Log of Kfs (mm/hr)")
+dev.off()
+}
+library(magick)
+cat('\n', 'animate frames', '\n')
+#all_frames
+all_frames_file_nm=list.files(temp_output_dir, full.names = T)
+all_frames=image_read(all_frames_file_nm[1])
+y_size=400
+all_frames <- image_scale(all_frames, paste0("x", y_size))
+j=2
+for (j in c(2:length(all_frames_file_nm))){
+frame=image_read(all_frames_file_nm[j])
+frame=image_scale(frame, paste0("x", y_size))
+all_frames=c(all_frames,frame)
+}
+animation=image_animate(all_frames,fps =10, loop = 0, dispose="background")
+cat('\n', 'save animation', '\n')
+gif_name=paste0(regressions_output_dir, proj_str,  "_", numeric_col1,"_and_", numeric_col2, ".gif")
+image_write(animation, gif_name)
+cat('\n', 'convert to mp4', '\n')
+#convert to mp4
+#https://rigor.com/blog/2015/12/optimizing-animated-gifs-with-html5-video
+#http://ffmpeg.zeranoe.com/builds/
+#https://en.wikipedia.org/wiki/FFmpeg
+#shell(paste0('cd "', wd,'" && "', wd,'ffmpeg/bin/ffmpeg.exe" -r 10 -y -i "', temp_output_dir, 'long/long%04d.jpg" -movflags faststart -pix_fmt yuv420p -vf "scale=trunc(iw/2)*2:trunc(ih/2)*2" "', output_dir,'animations/', site, '_', months[1], '-', days[1],'to', months[n_days], '-', days[n_days], '.mp4" && exit')) #'daily_animations', stabilization_str,
+shell(paste0('D: && cd ', wd,' && ', 'D:/projects/plant_cam_mine/daily_images_and_animation/ffmpeg/bin/ffmpeg.exe -r 10 -y -i ', temp_output_dir, 'img%04d.jpg -movflags faststart -pix_fmt yuv420p -vf "scale=trunc(iw/2)*2:trunc(ih/2)*2" "', mov_name, '" && exit')) #'daily_animations', stabilization_str,
+unlink(paste0(temp_output_dir,"img*.jpg")) #delete previous frames
+}
+}
+}
+}
+##########################################################################################
+dep_var="reiter"
+model_descri_string=paste0("20200512_",dep_var,"_stepwise_no_interaction_best_transformsT_fewERPreds")
+##forward stepwise no interaction
+#View(regression_mat)
+min.model = glm(dep_var ~ 1, data=regression_mat)
+biggest.model <- formula(glm(dep_var~.,data= regression_mat))
+fwd.model = step(min.model, direction='both', scope=biggest.model, k=3)
+best_predictors=names(fwd.model$coefficients)
+best_predictors=best_predictors[best_predictors!="(Intercept)"]
+for (X_col in X_cols){
+match_loc=grep(pattern=X_col,best_predictors, value=F)
+best_predictors[match_loc]=X_col
+}
+best_predictors=unique(best_predictors)
+predictions <- predict(fwd.model, regression_mat)
+mse <- mean((regression_mat$dep_var - predictions)^2) # summarize accuracy
+#plot(fwd.model) #https://data.library.virginia.edu/diagnostic-plots/
+#influence=lm.influence(fwd.model)
+var_imp_results=sorted_var_imp(fwd.model)
+var_imp_results=var_imp_results[,c(2,1)]
+names(var_imp_results)=c("Variable", "Variable importance")
+vars_in_random_factor_model=var_imp_results[,1]
+#most factor slopes make sense except abs.native.woody.species.floor.cover and ABS.total.understory.cover (likely Hapuu)
+#combine coeff and var imp
+summary_df=summary(fwd.model)
+summary_df=as.data.frame(summary_df$coefficients)
+summary_df=cbind(Variable=row.names(summary_df), summary_df)
+row.names(summary_df)=c()
+summary_df=merge(summary_df, var_imp_results, by="Variable")
+summary_df=summary_df[,c("Variable", "Estimate", "Variable importance", "Pr(>|t|)")]
+summary_df=summary_df[order(summary_df$`Variable importance`, decreasing = T),]
+output_file_nm=paste0(regressions_output_dir, model_descri_string, "_coeff_and_varImp.csv")
+#line_number=get_last_line(script.dir.info, script.name.info) #have this righ after a line next to the output that is unique in the script (including comments)
+write.csv(summary_df, output_file_nm, row.names = F)
+#output_meta_data_fx(output_file_nm, notes=paste("Line number: ", line_number))
+output_file_nm=paste0(regressions_output_dir, model_descri_string, ".txt")
+#line_number=get_last_line(script.dir.info, script.name.info) #have this righ after a line next to the output that is unique in the script (including comments)
+fileConn<-file(output_file_nm)
+writeLines(c(
+paste(c("model with the following x variables: ", X_cols), collapse = "\n"),
+capture.output(summary(fwd.model)),
+paste0("mse for model is ", print(mse), "\n"),
+paste0("#############################\nVARIABLE IMPORTANCE"),
+capture.output(var_imp_results),
+paste0("#############################\nVARIABLE IMPORTANCE AND COEFFICIENTS"),
+capture.output(summary_df)
+), fileConn)
+close(fileConn)
+#output_meta_data_fx(output_file_nm, notes="L2301")
+tmp=data.frame(actual=regression_mat$dep_var, predicted=predictions)
+a=ggplot(tmp, aes(x=actual, y=predicted)) + xlab("Actual") + ylab("Modeled") + xlim(0,10) + ylim(0,10) +
+geom_point(shape=1, size=3, stroke = 1.1)
+a=a+ theme_bw() + theme(panel.border = element_blank(), panel.grid.major = element_blank(), panel.grid.minor = element_blank(), axis.line = element_line(colour = "black"))
+a
+output_file_nm=paste0(regressions_output_dir, model_descri_string, ".tiff") #model pred for linear model
+#line_number=get_last_line(script.dir.info, script.name.info) #have this righ after a line next to the output that is unique in the script (including comments)
+ggsave(a, filename = output_file_nm, width = 5, height = 5, units = "in")
+#output_meta_data_fx(output_file_nm, notes=paste("Line number: ", line_number))
+model_descri_string=paste0("20200512_",dep_var,"_stepwise_w_interaction_best_transformsT_fewPreds")
+fwd_no_inter=fwd.model #save model without interactions to compare with model with interactions below
+#do  regression WITH the full transformed dataset (using bestNormalize)
+#with interactions!
+##forward stepwise with interaction
+regression_mat0=regression_mat[,c(best_predictors, "dep_var")]
+min.model = lm(dep_var ~ 1, data=regression_mat0)
+biggest.model <- formula(lm(dep_var~.*.,data= regression_mat0))
+fwd.model = step(min.model, direction='both', scope=biggest.model, k=3)
+#check for interactions
+# library(interplot) #https://cran.r-project.org/web/packages/interplot/vignettes/interplot-vignette.html
+# inter_x="soil.organic.matter.expert.estimate"
+# inter_y="ABS.canopy.ohia.cover"
+# interplot(m = fwd.model, var1 = inter_y, var2 = inter_x)+ xlab(inter_x) + ylab(paste0("Estimated Coefficient for\n", inter_y))
+#
+# inter_x="soil.organic.matter.expert.estimate"
+# inter_y="wider.ungulate.damage.ocular.estimate"
+# interplot(m = fwd.model, var1 = inter_y, var2 = inter_x)+ xlab(inter_x) + ylab(paste0("Estimated Coefficient for\n", inter_y))
+#
+# inter_x="litter.cover"
+# inter_y="ABS.canopy.ohia.cover"
+# interplot(m = fwd.model, var1 = inter_y, var2 = inter_x)+ xlab(inter_x) + ylab(paste0("Estimated Coefficient for\n", inter_y))
+#compare model with and without interactions
+#this test compares the reduction in the residual sum of squares
+anova(fwd_no_inter, fwd.model) #https://bookdown.org/ndphillips/YaRrr/comparing-regression-models-with-anova.html
+predictions <- predict(fwd.model, regression_mat)
+mse <- mean((regression_mat$dep_var - predictions)^2) # summarize accuracy
+#plot(fwd.model) #https://data.library.virginia.edu/diagnostic-plots/
+#influence=lm.influence(fwd.model)
+var_imp_results=sorted_var_imp(fwd.model)
+var_imp_results=var_imp_results[,c(2,1)]
+names(var_imp_results)=c("Variable", "Variable importance")
+vars_in_random_factor_model=var_imp_results[,1]
+#most factor slopes make sense except abs.native.woody.species.floor.cover and ABS.total.understory.cover (likely Hapuu)
+#combine coeff and var imp
+summary_df=summary(fwd.model)
+summary_df=as.data.frame(summary_df$coefficients)
+summary_df=cbind(Variable=row.names(summary_df), summary_df)
+row.names(summary_df)=c()
+summary_df=merge(summary_df, var_imp_results, by="Variable")
+summary_df=summary_df[,c("Variable", "Estimate", "Variable importance", "Pr(>|t|)")]
+summary_df=summary_df[order(summary_df$`Variable importance`, decreasing = T),]
+output_file_nm=paste0(regressions_output_dir, model_descri_string, "_coeff_and_varImp.csv")
+#line_number=get_last_line(script.dir.info, script.name.info) #have this righ after a line next to the output that is unique in the script (including comments)
+write.csv(summary_df, output_file_nm, row.names = F)
+#output_meta_data_fx(output_file_nm, notes=paste("Line number: ", line_number))
+output_file_nm=paste0(regressions_output_dir, model_descri_string, ".txt")
+#line_number=get_last_line(script.dir.info, script.name.info) #have this righ after a line next to the output that is unique in the script (including comments)
+fileConn<-file(output_file_nm)
+writeLines(c(
+paste(c("model with the following x variables: ", X_cols), collapse = "\n"),
+capture.output(summary(fwd.model)),
+paste0("mse for model is ", print(mse), "\n"),
+paste0("#############################\nVARIABLE IMPORTANCE"),
+capture.output(var_imp_results),
+paste0("#############################\nVARIABLE IMPORTANCE AND COEFFICIENTS"),
+capture.output(summary_df)
+), fileConn)
+close(fileConn)
+#output_meta_data_fx(output_file_nm, notes=paste("Line number: ", line_number))
+output_file_nm=paste0(regressions_output_dir, model_descri_string, ".tiff") #glm with interactions
+#line_number=get_last_line(script.dir.info, script.name.info) #have this righ after a line next to the output that is unique in the script (including comments)
+tiff(filename = output_file_nm, compression = "lzw", width = 600,height = 600, units = "px")
+plot(regression_mat$dep_var, predictions, xlab="Field log(Kfs)", ylab="Modeled log(Kfs)", xlim=c(0,10), ylim=c(0,10))
+dev.off()
+#output_meta_data_fx(output_file_nm, notes=paste("Line number: ", line_number))
+best_predictors_inter=names(fwd.model$coefficients)
+best_predictors_inter=best_predictors_inter[best_predictors_inter!="(Intercept)"]
+for (X_col in X_cols){
+match_loc=grep(pattern=X_col,best_predictors_inter, value=F)
+best_predictors_inter[match_loc]=X_col
+}
+best_predictors_inter=unique(best_predictors_inter)
+model_descri_string=paste0("20200512_",dep_var,"_stepwise_poison_no_interaction_best_transformsT_fewERPreds")
+##forward stepwise no interaction
+#View(regression_mat)
+min.model = glm(dep_var ~ 1, data=regression_mat, family = "poisson")
+biggest.model <- formula(glm(dep_var~.,data= regression_mat), family = "poisson")
+fwd.model = step(min.model, direction='both', scope=biggest.model, k=3, family = "poisson")
+best_predictors=names(fwd.model$coefficients)
+best_predictors=best_predictors[best_predictors!="(Intercept)"]
+for (X_col in X_cols){
+match_loc=grep(pattern=X_col,best_predictors, value=F)
+best_predictors[match_loc]=X_col
+}
+best_predictors=unique(best_predictors)
+predictions <- predict(fwd.model, regression_mat)
+mse <- mean((regression_mat$dep_var - predictions)^2) # summarize accuracy
+#plot(fwd.model) #https://data.library.virginia.edu/diagnostic-plots/
+#influence=lm.influence(fwd.model)
+var_imp_results=sorted_var_imp(fwd.model)
+var_imp_results=var_imp_results[,c(2,1)]
+names(var_imp_results)=c("Variable", "Variable importance")
+vars_in_random_factor_model=var_imp_results[,1]
+#most factor slopes make sense except abs.native.woody.species.floor.cover and ABS.total.understory.cover (likely Hapuu)
+#combine coeff and var imp
+summary_df=summary(fwd.model)
+summary_df=as.data.frame(summary_df$coefficients)
+summary_df=cbind(Variable=row.names(summary_df), summary_df)
+row.names(summary_df)=c()
+summary_df=merge(summary_df, var_imp_results, by="Variable")
+summary_df=summary_df[,c("Variable", "Estimate", "Variable importance", "Pr(>|t|)")]
+summary_df=summary_df[order(summary_df$`Variable importance`, decreasing = T),]
+output_file_nm=paste0(regressions_output_dir, model_descri_string, "_coeff_and_varImp.csv")
+#line_number=get_last_line(script.dir.info, script.name.info) #have this righ after a line next to the output that is unique in the script (including comments)
+write.csv(summary_df, output_file_nm, row.names = F)
+#output_meta_data_fx(output_file_nm, notes=paste("Line number: ", line_number))
+output_file_nm=paste0(regressions_output_dir, model_descri_string, ".txt")
+#line_number=get_last_line(script.dir.info, script.name.info) #have this righ after a line next to the output that is unique in the script (including comments)
+fileConn<-file(output_file_nm)
+writeLines(c(
+paste(c("model with the following x variables: ", X_cols), collapse = "\n"),
+capture.output(summary(fwd.model)),
+paste0("mse for model is ", print(mse), "\n"),
+paste0("#############################\nVARIABLE IMPORTANCE"),
+capture.output(var_imp_results),
+paste0("#############################\nVARIABLE IMPORTANCE AND COEFFICIENTS"),
+capture.output(summary_df)
+), fileConn)
+close(fileConn)
+#output_meta_data_fx(output_file_nm, notes="L2301")
+tmp=data.frame(actual=regression_mat$dep_var, predicted=predictions)
+a=ggplot(tmp, aes(x=actual, y=predicted)) + xlab("Actual") + ylab("Modeled") + xlim(0,10) + ylim(0,10) +
+geom_point(shape=1, size=3, stroke = 1.1)
+a=a+ theme_bw() + theme(panel.border = element_blank(), panel.grid.major = element_blank(), panel.grid.minor = element_blank(), axis.line = element_line(colour = "black"))
+output_file_nm=paste0(regressions_output_dir, model_descri_string, ".tiff") #model pred for linear model
+#line_number=get_last_line(script.dir.info, script.name.info) #have this righ after a line next to the output that is unique in the script (including comments)
+ggsave(a, filename = output_file_nm, width = 5, height = 5, units = "in")
+#output_meta_data_fx(output_file_nm, notes=paste("Line number: ", line_number))
+model_descri_string=paste0("20200512_",dep_var,"_stepwise_poison_w_interaction_best_transformsT_fewPreds")
+fwd_no_inter=fwd.model #save model without interactions to compare with model with interactions below
+#do  regression WITH the full transformed dataset (using bestNormalize)
+#with interactions!
+##forward stepwise with interaction
+regression_mat0=regression_mat[,c(best_predictors, "dep_var")]
+min.model = lm(dep_var ~ 1, data=regression_mat0, family="poison")
+biggest.model <- formula(lm(dep_var~.*.,data= regression_mat0), family="poison")
+fwd.model = step(min.model, direction='both', scope=biggest.model, k=3, family="poison")
+#check for interactions
+# library(interplot) #https://cran.r-project.org/web/packages/interplot/vignettes/interplot-vignette.html
+# inter_x="soil.organic.matter.expert.estimate"
+# inter_y="ABS.canopy.ohia.cover"
+# interplot(m = fwd.model, var1 = inter_y, var2 = inter_x)+ xlab(inter_x) + ylab(paste0("Estimated Coefficient for\n", inter_y))
+#
+# inter_x="soil.organic.matter.expert.estimate"
+# inter_y="wider.ungulate.damage.ocular.estimate"
+# interplot(m = fwd.model, var1 = inter_y, var2 = inter_x)+ xlab(inter_x) + ylab(paste0("Estimated Coefficient for\n", inter_y))
+#
+# inter_x="litter.cover"
+# inter_y="ABS.canopy.ohia.cover"
+# interplot(m = fwd.model, var1 = inter_y, var2 = inter_x)+ xlab(inter_x) + ylab(paste0("Estimated Coefficient for\n", inter_y))
+#compare model with and without interactions
+#this test compares the reduction in the residual sum of squares
+anova(fwd_no_inter, fwd.model) #https://bookdown.org/ndphillips/YaRrr/comparing-regression-models-with-anova.html
+predictions <- predict(fwd.model, regression_mat)
+mse <- mean((regression_mat$dep_var - predictions)^2) # summarize accuracy
+#plot(fwd.model) #https://data.library.virginia.edu/diagnostic-plots/
+#influence=lm.influence(fwd.model)
+var_imp_results=sorted_var_imp(fwd.model)
+var_imp_results=var_imp_results[,c(2,1)]
+names(var_imp_results)=c("Variable", "Variable importance")
+vars_in_random_factor_model=var_imp_results[,1]
+#most factor slopes make sense except abs.native.woody.species.floor.cover and ABS.total.understory.cover (likely Hapuu)
+#combine coeff and var imp
+summary_df=summary(fwd.model)
+summary_df=as.data.frame(summary_df$coefficients)
+summary_df=cbind(Variable=row.names(summary_df), summary_df)
+row.names(summary_df)=c()
+summary_df=merge(summary_df, var_imp_results, by="Variable")
+summary_df=summary_df[,c("Variable", "Estimate", "Variable importance", "Pr(>|t|)")]
+summary_df=summary_df[order(summary_df$`Variable importance`, decreasing = T),]
+output_file_nm=paste0(regressions_output_dir, model_descri_string, "_coeff_and_varImp.csv")
+#line_number=get_last_line(script.dir.info, script.name.info) #have this righ after a line next to the output that is unique in the script (including comments)
+write.csv(summary_df, output_file_nm, row.names = F)
+#output_meta_data_fx(output_file_nm, notes=paste("Line number: ", line_number))
+output_file_nm=paste0(regressions_output_dir, model_descri_string, ".txt")
+#line_number=get_last_line(script.dir.info, script.name.info) #have this righ after a line next to the output that is unique in the script (including comments)
+fileConn<-file(output_file_nm)
+writeLines(c(
+paste(c("model with the following x variables: ", X_cols), collapse = "\n"),
+capture.output(summary(fwd.model)),
+paste0("mse for model is ", print(mse), "\n"),
+paste0("#############################\nVARIABLE IMPORTANCE"),
+capture.output(var_imp_results),
+paste0("#############################\nVARIABLE IMPORTANCE AND COEFFICIENTS"),
+capture.output(summary_df)
+), fileConn)
+close(fileConn)
+#output_meta_data_fx(output_file_nm, notes=paste("Line number: ", line_number))
+output_file_nm=paste0(regressions_output_dir, model_descri_string, ".tiff") #glm with interactions
+#line_number=get_last_line(script.dir.info, script.name.info) #have this righ after a line next to the output that is unique in the script (including comments)
+tiff(filename = output_file_nm, compression = "lzw", width = 600,height = 600, units = "px")
+plot(regression_mat$dep_var, predictions, xlab="Field log(Kfs)", ylab="Modeled log(Kfs)", xlim=c(0,10), ylim=c(0,10))
+dev.off()
+#output_meta_data_fx(output_file_nm, notes=paste("Line number: ", line_number))
