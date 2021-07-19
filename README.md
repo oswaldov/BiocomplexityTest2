@@ -1,2 +1,2 @@
-# homework-0
+# Biocomplexity
 Biocomplexity project
